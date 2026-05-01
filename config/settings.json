@@ -1,0 +1,7 @@
+{
+  "timeframe": "240",
+  "timezone": "America/Chicago",
+  "cron": "1 */4 * * *",
+  "defaultExchange": "CME_MINI",
+  "runOnStartup": true
+}
