@@ -14,6 +14,34 @@ type Signal = {
 
 let running = false;
 
+function timeframeToSeconds(timeframe: string): number | null {
+  const minutes = Number(timeframe);
+  if (Number.isFinite(minutes)) {
+    return minutes * 60;
+  }
+
+  const match = timeframe.trim().match(/^(\d+)([a-zA-Z])$/);
+  if (!match) {
+    return null;
+  }
+
+  const value = Number(match[1]);
+  const unit = match[2].toUpperCase();
+
+  switch (unit) {
+    case "H":
+      return value * 3600;
+    case "D":
+      return value * 86400;
+    case "W":
+      return value * 604800;
+    case "M":
+      return value * 2592000;
+    default:
+      return null;
+  }
+}
+
 function evaluateSignals(previous: Candle, current: Candle): Signal[] {
   const signals: Signal[] = [];
 
@@ -62,12 +90,33 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
     return;
   }
 
-  const previous = candles[candles.length - 2];
-  const current = candles[candles.length - 1];
+  const timeframeSeconds = timeframeToSeconds(settings.timeframe);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  let currentIndex = candles.length - 1;
+
+  if (timeframeSeconds !== null) {
+    const latest = candles[currentIndex];
+    if (nowSeconds < latest.time + timeframeSeconds) {
+      currentIndex -= 1;
+    }
+  }
+
+  if (currentIndex < 1) {
+    console.warn(`Not enough closed candles for ${tvSymbol}`);
+    return;
+  }
+
+  const previous = candles[currentIndex - 1];
+  const current = candles[currentIndex];
   const stateKey = `${tvSymbol}|${settings.timeframe}`;
   const lastChecked = state[stateKey]?.lastChecked ?? 0;
+  const staleByNextCandle = timeframeSeconds !== null && lastChecked >= current.time + timeframeSeconds;
 
-  if (lastChecked >= current.time) {
+  console.log(
+    `Evaluating ${tvSymbol} ${formatTimeframe(settings.timeframe)} prev:${formatTime(previous.time, settings.timezone)} curr:${formatTime(current.time, settings.timezone)} ${settings.timezone}`
+  );
+
+  if (lastChecked >= current.time && !staleByNextCandle) {
     return;
   }
 

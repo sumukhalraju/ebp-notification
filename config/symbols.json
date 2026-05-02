@@ -1,6 +1,6 @@
 {
   "symbols": [
     { "symbol": "MNQ1!", "exchange": "CME_MINI" },
-    { "symbol": "GC!", "exchange": "COMEX" }
+    { "symbol": "GC1!", "exchange": "COMEX" }
   ]
 }
