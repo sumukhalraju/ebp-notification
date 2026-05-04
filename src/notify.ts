@@ -51,17 +51,14 @@ export async function sendNotifications(message: string): Promise<void> {
 
   if (targets.telegramToken && targets.telegramChatId) {
     tasks.push(sendTelegram(targets.telegramToken, targets.telegramChatId, message));
-  } else {
-    console.warn("Telegram not configured; set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID");
   }
 
   if (targets.discordWebhookUrl) {
     tasks.push(sendDiscord(targets.discordWebhookUrl, message));
-  } else {
-    console.warn("Discord not configured; set DISCORD_WEBHOOK_URL");
   }
 
   if (tasks.length === 0) {
+    console.warn("No notification targets configured; set TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID or DISCORD_WEBHOOK_URL");
     return;
   }
 

@@ -23,5 +23,7 @@ export async function loadState(): Promise<State> {
 
 export async function saveState(state: State): Promise<void> {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+  const tmpPath = `${STATE_PATH}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf-8");
+  await fs.rename(tmpPath, STATE_PATH);
 }

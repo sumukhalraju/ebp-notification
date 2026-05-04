@@ -5,7 +5,7 @@
     "moduleResolution": "Node",
     "types": ["node"],
     "ignoreDeprecations": "5.0",
-    "lib": ["ES2022", "DOM"],
+    "lib": ["ES2022"],
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,

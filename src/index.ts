@@ -26,7 +26,12 @@ function timeframeToSeconds(timeframe: string): number | null {
   }
 
   const value = Number(match[1]);
-  const unit = match[2].toUpperCase();
+  const rawUnit = match[2];
+  const unit = rawUnit.toUpperCase();
+
+  if (rawUnit === "m") {
+    return value * 60;
+  }
 
   switch (unit) {
     case "H":
@@ -83,70 +88,76 @@ function buildMessage(
 
 async function processSymbol(entry: SymbolEntry, settings: Settings, state: State): Promise<void> {
   const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
-  const candles = await fetchCandles(tvSymbol, settings.timeframe, 3);
+  const timeframeSeconds = timeframeToSeconds(settings.timeframe);
+  const fetchCount = timeframeSeconds !== null ? Math.ceil(86400 / timeframeSeconds) + 2 : 10;
+  const candles = await fetchCandles(tvSymbol, settings.timeframe, fetchCount);
 
   if (candles.length < 2) {
     console.warn(`Not enough candles for ${tvSymbol}`);
     return;
   }
 
-  const timeframeSeconds = timeframeToSeconds(settings.timeframe);
   const nowSeconds = Math.floor(Date.now() / 1000);
-  let currentIndex = candles.length - 1;
-
-  if (timeframeSeconds !== null) {
-    const latest = candles[currentIndex];
-    if (nowSeconds < latest.time + timeframeSeconds) {
-      currentIndex -= 1;
+  const closedCandles = candles.filter((candle, index) => {
+    if (timeframeSeconds !== null) {
+      return nowSeconds >= candle.time + timeframeSeconds;
     }
-  }
+    return index < candles.length - 1;
+  });
 
-  if (currentIndex < 1) {
+  if (closedCandles.length < 2) {
     console.warn(`Not enough closed candles for ${tvSymbol}`);
     return;
   }
 
-  const previous = candles[currentIndex - 1];
-  const current = candles[currentIndex];
   const stateKey = `${tvSymbol}|${settings.timeframe}`;
   const lastChecked = state[stateKey]?.lastChecked ?? 0;
-  const staleByNextCandle = timeframeSeconds !== null && lastChecked >= current.time + timeframeSeconds;
-
-  console.log(
-    `Evaluating ${tvSymbol} ${formatTimeframe(settings.timeframe)} prev:${formatTime(previous.time, settings.timezone)} curr:${formatTime(current.time, settings.timezone)} ${settings.timezone}`
-  );
-
-  if (lastChecked >= current.time && !staleByNextCandle) {
-    return;
-  }
-
-  const signals = evaluateSignals(previous, current);
   const timeframeLabel = formatTimeframe(settings.timeframe);
+  let latestCheckedTime = lastChecked;
 
-  if (signals.length > 0) {
-    for (const signal of signals) {
-      const message = buildMessage(
-        entry,
-        tvSymbol,
-        timeframeLabel,
-        previous,
-        current,
-        settings.timezone,
-        signal,
-        settings.defaultExchange
-      );
-      await sendNotifications(message);
+  for (let i = 1; i < closedCandles.length; i++) {
+    const previous = closedCandles[i - 1];
+    const current = closedCandles[i];
+
+    if (lastChecked >= current.time) {
+      continue;
     }
 
-    state[stateKey] = {
-      ...state[stateKey],
-      lastAlert: current.time
-    };
+    console.log(
+      `Evaluating ${tvSymbol} ${timeframeLabel} prev:${formatTime(previous.time, settings.timezone)} curr:${formatTime(current.time, settings.timezone)} ${settings.timezone}`
+    );
+
+    const signals = evaluateSignals(previous, current);
+
+    if (signals.length > 0) {
+      for (const signal of signals) {
+        const message = buildMessage(
+          entry,
+          tvSymbol,
+          timeframeLabel,
+          previous,
+          current,
+          settings.timezone,
+          signal,
+          settings.defaultExchange
+        );
+        await sendNotifications(message);
+      }
+
+      state[stateKey] = {
+        ...state[stateKey],
+        lastAlert: current.time
+      };
+    }
+
+    if (current.time > latestCheckedTime) {
+      latestCheckedTime = current.time;
+    }
   }
 
   state[stateKey] = {
     ...state[stateKey],
-    lastChecked: current.time
+    lastChecked: latestCheckedTime
   };
 }
 
@@ -185,13 +196,22 @@ async function main(): Promise<void> {
     return;
   }
 
-  cron.schedule(
+  const task = cron.schedule(
     settings.cron,
     () => {
       void runCheck();
     },
     { timezone: settings.timezone }
   );
+
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}, shutting down gracefully...`);
+    task.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 
   if (settings.runOnStartup) {
     void runCheck();
