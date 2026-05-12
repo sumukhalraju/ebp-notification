@@ -163,7 +163,7 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
 
 async function runCheck(): Promise<void> {
   if (running) {
-    console.warn("Previous run still in progress, skipping");
+    console.error("SKIPPED: Previous run still in progress, skipping this scheduled check");
     return;
   }
 

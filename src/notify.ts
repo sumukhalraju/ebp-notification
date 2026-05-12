@@ -58,14 +58,20 @@ export async function sendNotifications(message: string): Promise<void> {
   }
 
   if (tasks.length === 0) {
-    console.warn("No notification targets configured; set TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID or DISCORD_WEBHOOK_URL");
+    console.error("NOTIFICATION FAILED: No targets configured. Set TELEGRAM_BOT_TOKEN+TELEGRAM_CHAT_ID or DISCORD_WEBHOOK_URL");
     return;
   }
 
   const results = await Promise.allSettled(tasks);
+  let successCount = 0;
+  let failCount = 0;
   for (const result of results) {
     if (result.status === "rejected") {
-      console.error(result.reason);
+      console.error("NOTIFICATION FAILED:", result.reason);
+      failCount++;
+    } else {
+      successCount++;
     }
   }
+  console.log(`Notification results: ${successCount} sent, ${failCount} failed`);
 }
