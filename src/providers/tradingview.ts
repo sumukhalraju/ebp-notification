@@ -4,8 +4,10 @@ import { Candle } from "../types";
 type Period = {
   time: number;
   open: number;
-  high: number;
-  low: number;
+  max?: number;
+  high?: number;
+  min?: number;
+  low?: number;
   close: number;
   volume?: number;
 };
@@ -31,8 +33,8 @@ function candlesFromPeriods(periods: Period[], count: number): Candle[] {
     .map((period) => ({
       time: Number(period.time),
       open: Number(period.open),
-      high: Number(period.high),
-      low: Number(period.low),
+      high: Number(period.max ?? period.high),
+      low: Number(period.min ?? period.low),
       close: Number(period.close),
       volume: period.volume === undefined ? undefined : Number(period.volume)
     }))
