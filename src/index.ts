@@ -2,7 +2,7 @@ import "dotenv/config";
 import cron from "node-cron";
 import { displayName, loadSettings, loadSymbols, toTvSymbol } from "./config";
 import { formatPrice, formatTime, formatTimeframe } from "./format";
-import { sendNotifications } from "./notify";
+import { sendNotifications, getTargets } from "./notify";
 import { fetchCandles } from "./providers/tradingview";
 import { loadState, saveState } from "./state";
 import { Candle, Settings, State, SymbolEntry } from "./types";
@@ -10,6 +10,12 @@ import { Candle, Settings, State, SymbolEntry } from "./types";
 type Signal = {
   id: "sweep_low" | "sweep_high";
   label: string;
+};
+
+type RunResult = {
+  symbol: string;
+  patterns: number;
+  error?: string;
 };
 
 let running = false;
@@ -86,15 +92,17 @@ function buildMessage(
   return [title, signal.label, timeLine, previousLine, currentLine].join("\n");
 }
 
-async function processSymbol(entry: SymbolEntry, settings: Settings, state: State): Promise<void> {
+async function processSymbol(entry: SymbolEntry, settings: Settings, state: State): Promise<number> {
   const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
   const timeframeSeconds = timeframeToSeconds(settings.timeframe);
   const fetchCount = timeframeSeconds !== null ? Math.ceil(86400 / timeframeSeconds) + 2 : 10;
+  console.log(`Fetching ${fetchCount} candles for ${tvSymbol} (${settings.timeframe}min)...`);
   const candles = await fetchCandles(tvSymbol, settings.timeframe, fetchCount);
+  console.log(`Fetched ${candles.length} candles for ${tvSymbol}`);
 
   if (candles.length < 2) {
     console.warn(`Not enough candles for ${tvSymbol}`);
-    return;
+    return 0;
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -104,22 +112,27 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
     }
     return index < candles.length - 1;
   });
+  console.log(`${tvSymbol}: ${closedCandles.length} closed candles out of ${candles.length} total`);
 
   if (closedCandles.length < 2) {
     console.warn(`Not enough closed candles for ${tvSymbol}`);
-    return;
+    return 0;
   }
 
   const stateKey = `${tvSymbol}|${settings.timeframe}`;
   const lastChecked = state[stateKey]?.lastChecked ?? 0;
   const timeframeLabel = formatTimeframe(settings.timeframe);
   let latestCheckedTime = lastChecked;
+  let patternsFound = 0;
+
+  console.log(`${tvSymbol}: lastChecked=${lastChecked === 0 ? "never" : formatTime(lastChecked, settings.timezone)}`);
 
   for (let i = 1; i < closedCandles.length; i++) {
     const previous = closedCandles[i - 1];
     const current = closedCandles[i];
 
     if (lastChecked >= current.time) {
+      console.log(`Skipping already-checked pair ${tvSymbol}: ${formatTime(current.time, settings.timezone)}`);
       continue;
     }
 
@@ -130,6 +143,7 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
     const signals = evaluateSignals(previous, current);
 
     if (signals.length > 0) {
+      console.log(`SIGNAL DETECTED: ${tvSymbol} — ${signals.map(s => s.label).join(", ")}`);
       for (const signal of signals) {
         const message = buildMessage(
           entry,
@@ -144,10 +158,14 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
         await sendNotifications(message);
       }
 
+      patternsFound += signals.length;
+
       state[stateKey] = {
         ...state[stateKey],
         lastAlert: current.time
       };
+    } else {
+      console.log(`No EBP for ${tvSymbol} at ${formatTime(current.time, settings.timezone)}`);
     }
 
     if (current.time > latestCheckedTime) {
@@ -159,12 +177,16 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
     ...state[stateKey],
     lastChecked: latestCheckedTime
   };
+
+  return patternsFound;
 }
 
-async function runCheck(): Promise<void> {
+async function runCheck(): Promise<RunResult[]> {
+  const results: RunResult[] = [];
+
   if (running) {
     console.error("SKIPPED: Previous run still in progress, skipping this scheduled check");
-    return;
+    return results;
   }
 
   running = true;
@@ -174,10 +196,14 @@ async function runCheck(): Promise<void> {
     const state = await loadState();
 
     for (const entry of symbols) {
+      const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
       try {
-        await processSymbol(entry, settings, state);
+        const patterns = await processSymbol(entry, settings, state);
+        results.push({ symbol: tvSymbol, patterns });
       } catch (error) {
-        console.error(`Error processing ${entry.symbol}`, error);
+        const msg = error instanceof Error ? error.message : String(error);
+        results.push({ symbol: tvSymbol, patterns: 0, error: msg });
+        console.error(`Error processing ${tvSymbol}`, error);
       }
     }
 
@@ -185,21 +211,75 @@ async function runCheck(): Promise<void> {
   } finally {
     running = false;
   }
+
+  return results;
+}
+
+function buildRunSummary(results: RunResult[], settings: Settings): string {
+  const totalPatterns = results.reduce((sum, r) => sum + r.patterns, 0);
+  const now = new Date();
+  const timeStr = now.toLocaleString("en-US", { timeZone: settings.timezone, hour12: true });
+
+  const lines = [`EBP ${formatTimeframe(settings.timeframe)} Scan — ${timeStr} ${settings.timezone}`];
+
+  for (const r of results) {
+    if (r.error) {
+      lines.push(`${r.symbol}: ERROR — ${r.error}`);
+    } else if (r.patterns > 0) {
+      lines.push(`${r.symbol}: ${r.patterns} EBP signal(s)`);
+    } else {
+      lines.push(`${r.symbol}: no EBP detected`);
+    }
+  }
+
+  lines.push(`Total: ${totalPatterns} signal(s) across ${results.length} symbol(s)`);
+  return lines.join("\n");
+}
+
+async function runAndNotify(settings: Settings): Promise<void> {
+  console.log(`[${new Date().toISOString()}] Running EBP scan...`);
+  const results = await runCheck();
+
+  if (results.length === 0) {
+    console.log("Scan skipped (no results)");
+    return;
+  }
+
+  const summary = buildRunSummary(results, settings);
+  console.log(summary.replace(/\n/g, " | "));
+  await sendNotifications(summary);
 }
 
 async function main(): Promise<void> {
   const settings = await loadSettings();
+  const symbols = await loadSymbols();
   const runOnce = process.argv.includes("--once");
 
+  // --- Startup diagnostics ---
+  const targets = getTargets();
+  console.log("=== EBP Notification Service ===");
+  console.log(`Settings: timeframe=${settings.timeframe}min zone=${settings.timezone} cron="${settings.cron}"`);
+  console.log(`Symbols: ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`);
+  console.log(`Telegram: ${targets.telegramToken && targets.telegramChatId ? "configured" : "MISSING"}`);
+  console.log(`Discord:  ${targets.discordWebhookUrl ? "configured" : "not set"}`);
+  console.log(`DRY_RUN:  ${targets.dryRun ? "ON — notifications DISABLED" : "off"}`);
+  console.log(`Run mode: ${runOnce ? "once" : "scheduled"}`);
+  console.log("================================");
+
   if (runOnce) {
-    await runCheck();
+    await runAndNotify(settings);
     return;
   }
+
+  // Startup notification
+  await sendNotifications(
+    `EBP Bot started\nTimeframe: ${formatTimeframe(settings.timeframe)}\nSchedule: ${settings.cron} (${settings.timezone})\nSymbols: ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`
+  );
 
   const task = cron.schedule(
     settings.cron,
     () => {
-      void runCheck();
+      void runAndNotify(settings);
     },
     { timezone: settings.timezone }
   );
@@ -214,7 +294,7 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   if (settings.runOnStartup) {
-    void runCheck();
+    void runAndNotify(settings);
   }
 
   console.log(`Scheduler started with cron ${settings.cron} (${settings.timezone})`);

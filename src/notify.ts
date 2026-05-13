@@ -5,7 +5,7 @@ type NotificationTargets = {
   dryRun: boolean;
 };
 
-function getTargets(): NotificationTargets {
+export function getTargets(): NotificationTargets {
   return {
     telegramToken: process.env.TELEGRAM_BOT_TOKEN,
     telegramChatId: process.env.TELEGRAM_CHAT_ID,
