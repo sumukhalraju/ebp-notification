@@ -73,6 +73,21 @@ function evaluateSignals(previous: Candle, current: Candle): Signal[] {
   return signals;
 }
 
+function padRight(str: string, len: number): string {
+  return str.padEnd(len, " ");
+}
+
+function formatOHLC(label: string, o: number, h: number, l: number, c: number): string {
+  const pad = 9;
+  return [
+    `${label}`,
+    `  Open  : ${padRight(formatPrice(o), pad)}`,
+    `  High  : ${padRight(formatPrice(h), pad)}`,
+    `  Low   : ${padRight(formatPrice(l), pad)}`,
+    `  Close : ${formatPrice(c)}`
+  ].join("\n");
+}
+
 function buildMessage(
   entry: SymbolEntry,
   tvSymbol: string,
@@ -84,12 +99,21 @@ function buildMessage(
   defaultExchange?: string
 ): string {
   const name = displayName(entry, defaultExchange);
-  const title = entry.name ? `${name} (${tvSymbol}) ${timeframeLabel}` : `${tvSymbol} ${timeframeLabel}`;
-  const timeLine = `Candle time: ${formatTime(current.time, timeZone)} ${timeZone}`;
-  const previousLine = `Prev O:${formatPrice(previous.open)} H:${formatPrice(previous.high)} L:${formatPrice(previous.low)} C:${formatPrice(previous.close)}`;
-  const currentLine = `Curr O:${formatPrice(current.open)} H:${formatPrice(current.high)} L:${formatPrice(current.low)} C:${formatPrice(current.close)}`;
+  const labelWidth = 12;
+  const lines = [
+    "═══════════════════════════════════",
+    `${padRight("Symbol", labelWidth)}: ${name} (${tvSymbol})`,
+    `${padRight("Timeframe", labelWidth)}: ${timeframeLabel}`,
+    `${padRight("Signal", labelWidth)}: ${signal.label}`,
+    `${padRight("Time", labelWidth)}: ${formatTime(current.time, timeZone)}  ${timeZone}`,
+    "",
+    formatOHLC("Previous Candle:", previous.open, previous.high, previous.low, previous.close),
+    "",
+    formatOHLC("Current Candle:", current.open, current.high, current.low, current.close),
+    "═══════════════════════════════════"
+  ];
 
-  return [title, signal.label, timeLine, previousLine, currentLine].join("\n");
+  return lines.join("\n");
 }
 
 async function processSymbol(entry: SymbolEntry, settings: Settings, state: State): Promise<number> {
@@ -220,19 +244,26 @@ function buildRunSummary(results: RunResult[], settings: Settings): string {
   const now = new Date();
   const timeStr = now.toLocaleString("en-US", { timeZone: settings.timezone, hour12: true });
 
-  const lines = [`EBP ${formatTimeframe(settings.timeframe)} Scan — ${timeStr} ${settings.timezone}`];
+  const maxSymLen = Math.max(...results.map(r => r.symbol.length), 8);
+  const lines = [
+    "─────────────────────────────────────",
+    `EBP ${formatTimeframe(settings.timeframe)} Scan — ${timeStr} ${settings.timezone}`,
+    "",
+  ];
 
   for (const r of results) {
     if (r.error) {
-      lines.push(`${r.symbol}: ERROR — ${r.error}`);
+      lines.push(`  ${padRight(r.symbol, maxSymLen)} : ERROR — ${r.error}`);
     } else if (r.patterns > 0) {
-      lines.push(`${r.symbol}: ${r.patterns} EBP signal(s)`);
+      lines.push(`  ${padRight(r.symbol, maxSymLen)} : ${r.patterns} signal(s)`);
     } else {
-      lines.push(`${r.symbol}: no EBP detected`);
+      lines.push(`  ${padRight(r.symbol, maxSymLen)} : no EBP detected`);
     }
   }
 
+  lines.push("");
   lines.push(`Total: ${totalPatterns} signal(s) across ${results.length} symbol(s)`);
+  lines.push("─────────────────────────────────────");
   return lines.join("\n");
 }
 
@@ -272,8 +303,18 @@ async function main(): Promise<void> {
   }
 
   // Startup notification
+  const labelW = 12;
   await sendNotifications(
-    `EBP Bot started\nTimeframe: ${formatTimeframe(settings.timeframe)}\nSchedule: ${settings.cron} (${settings.timezone})\nSymbols: ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`
+    [
+      "═══════════════════════════════════",
+      "EBP Bot Started",
+      "═══════════════════════════════════",
+      "",
+      `${padRight("Timeframe", labelW)} : ${formatTimeframe(settings.timeframe)}`,
+      `${padRight("Schedule", labelW)} : ${settings.cron}  (${settings.timezone})`,
+      `${padRight("Symbols", labelW)} : ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`,
+      "═══════════════════════════════════"
+    ].join("\n")
   );
 
   const task = cron.schedule(

@@ -21,7 +21,9 @@ export function formatPrice(value: number): string {
   if (!Number.isFinite(value)) {
     return "n/a";
   }
-  return value.toFixed(2);
+  const [intPart, decPart] = value.toFixed(2).split(".");
+  const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${formatted}.${decPart}`;
 }
 
 export function formatTimeframe(timeframe: string): string {
