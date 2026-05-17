@@ -104,6 +104,50 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
   });
 }
 
+function aggregateToH7(candles1h: Candle[], timezone: string, desiredCount: number): Candle[] {
+  const targetHours = new Set([18, 1, 8]);
+  const candleMap = new Map<number, Candle>();
+  for (const c of candles1h) {
+    candleMap.set(c.time, c);
+  }
+
+  const result: Candle[] = [];
+  for (const candle of candles1h) {
+    if (result.length >= desiredCount) break;
+
+    const date = new Date(candle.time * 1000);
+    const etHour = parseInt(
+      new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: false }).format(date),
+      10
+    );
+
+    if (!targetHours.has(etHour)) continue;
+
+    const group: Candle[] = [];
+    for (let i = 0; i < 7; i++) {
+      const c = candleMap.get(candle.time + i * 3600);
+      if (!c) break;
+      group.push(c);
+    }
+    if (group.length !== 7) continue;
+
+    result.push({
+      time: candle.time,
+      open: group[0].open,
+      high: Math.max(...group.map(c => c.high)),
+      low: Math.min(...group.map(c => c.low)),
+      close: group[6].close,
+    });
+  }
+
+  return result;
+}
+
+export async function fetchCandlesH7(tvSymbol: string, timezone: string, count: number): Promise<Candle[]> {
+  const candles1h = await fetchCandles(tvSymbol, "60", count * 30);
+  return aggregateToH7(candles1h, timezone, count);
+}
+
 export async function fetchCandles(tvSymbol: string, timeframe: string, count: number): Promise<Candle[]> {
   const maxRetries = 3;
   let lastError: Error | undefined;

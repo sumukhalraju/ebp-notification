@@ -19,6 +19,7 @@ export type Settings = {
   cron: string;
   defaultExchange?: string;
   runOnStartup?: boolean;
+  h7?: boolean;
 };
 
 export type SymbolsConfig = {

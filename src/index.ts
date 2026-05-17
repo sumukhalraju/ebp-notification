@@ -3,7 +3,7 @@ import cron from "node-cron";
 import { displayName, loadSettings, loadSymbols, toTvSymbol } from "./config";
 import { formatPrice, formatTime, formatTimeframe } from "./format";
 import { sendNotifications, getTargets } from "./notify";
-import { fetchCandles } from "./providers/tradingview";
+import { fetchCandles, fetchCandlesH7 } from "./providers/tradingview";
 import { loadState, saveState } from "./state";
 import { Candle, Settings, State, SymbolEntry } from "./types";
 
@@ -231,6 +231,124 @@ async function runCheck(): Promise<RunResult[]> {
       }
     }
 
+    if (settings.h7) {
+      const h7Timeframe = "420";
+      const h7Seconds = timeframeToSeconds(h7Timeframe);
+      const h7Label = formatTimeframe(h7Timeframe);
+
+      for (const entry of symbols) {
+        const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
+        try {
+          const fetchCount = h7Seconds !== null ? Math.ceil(86400 / h7Seconds) + 2 : 8;
+          console.log(`Fetching H7 candles for ${tvSymbol} (${h7Label})...`);
+          const candles = await fetchCandlesH7(tvSymbol, settings.timezone, fetchCount);
+          console.log(`Fetched ${candles.length} H7 candles for ${tvSymbol}`);
+
+          if (candles.length < 2) {
+            console.warn(`Not enough H7 candles for ${tvSymbol}`);
+            continue;
+          }
+
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          const closedCandles = candles.filter(candle => nowSeconds >= candle.time + h7Seconds!);
+          console.log(`${tvSymbol} H7: ${closedCandles.length} closed candles out of ${candles.length} total`);
+
+          if (closedCandles.length < 2) {
+            console.warn(`Not enough closed H7 candles for ${tvSymbol}`);
+            continue;
+          }
+
+          const stateKey = `${tvSymbol}|${h7Timeframe}`;
+          const lastChecked = state[stateKey]?.lastChecked ?? 0;
+          let latestCheckedTime = lastChecked;
+          let h7Patterns = 0;
+
+          console.log(`${tvSymbol} H7: lastChecked=${lastChecked === 0 ? "never" : formatTime(lastChecked, settings.timezone)}`);
+
+          for (let i = 1; i < closedCandles.length; i++) {
+            const previous = closedCandles[i - 1];
+            const current = closedCandles[i];
+
+            if (lastChecked >= current.time) {
+              console.log(`Skipping already-checked H7 pair ${tvSymbol}: ${formatTime(current.time, settings.timezone)}`);
+              continue;
+            }
+
+            console.log(
+              `Evaluating H7 ${tvSymbol} ${h7Label} prev:${formatTime(previous.time, settings.timezone)} curr:${formatTime(current.time, settings.timezone)} ${settings.timezone}`
+            );
+
+            const prevHour = parseInt(
+              new Intl.DateTimeFormat("en-US", { timeZone: settings.timezone, hour: "numeric", hour12: false }).format(new Date(previous.time * 1000)),
+              10
+            );
+            const currHour = parseInt(
+              new Intl.DateTimeFormat("en-US", { timeZone: settings.timezone, hour: "numeric", hour12: false }).format(new Date(current.time * 1000)),
+              10
+            );
+
+            if (!((prevHour === 18 && currHour === 1) || (prevHour === 1 && currHour === 8))) {
+              console.log(`Skipping non-target H7 pair: ${prevHour}:00 -> ${currHour}:00`);
+              continue;
+            }
+
+            const signals = evaluateSignals(previous, current);
+
+            if (signals.length > 0) {
+              console.log(`SIGNAL DETECTED H7: ${tvSymbol} — ${signals.map(s => s.label).join(", ")}`);
+              for (const signal of signals) {
+                const message = buildMessage(
+                  entry,
+                  tvSymbol,
+                  h7Label,
+                  previous,
+                  current,
+                  settings.timezone,
+                  signal,
+                  settings.defaultExchange
+                );
+                await sendNotifications(message);
+              }
+
+              h7Patterns += signals.length;
+
+              state[stateKey] = {
+                ...state[stateKey],
+                lastAlert: current.time
+              };
+            } else {
+              console.log(`No EBP for H7 ${tvSymbol} at ${formatTime(current.time, settings.timezone)}`);
+            }
+
+            if (current.time > latestCheckedTime) {
+              latestCheckedTime = current.time;
+            }
+          }
+
+          state[stateKey] = {
+            ...state[stateKey],
+            lastChecked: latestCheckedTime
+          };
+
+          const existing = results.find(r => r.symbol === tvSymbol);
+          if (existing) {
+            existing.patterns += h7Patterns;
+          } else {
+            results.push({ symbol: tvSymbol, patterns: h7Patterns });
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.error(`Error processing H7 ${tvSymbol}`, error);
+          const existing = results.find(r => r.symbol === tvSymbol);
+          if (existing) {
+            existing.error = existing.error ? `${existing.error}; H7: ${msg}` : `H7: ${msg}`;
+          } else {
+            results.push({ symbol: tvSymbol, patterns: 0, error: `H7: ${msg}` });
+          }
+        }
+      }
+    }
+
     await saveState(state);
   } finally {
     running = false;
@@ -247,7 +365,7 @@ function buildRunSummary(results: RunResult[], settings: Settings): string {
   const maxSymLen = Math.max(...results.map(r => r.symbol.length), 8);
   const lines = [
     "─────────────────────────────────────",
-    `EBP ${formatTimeframe(settings.timeframe)} Scan — ${timeStr} ${settings.timezone}`,
+    `EBP ${formatTimeframe(settings.timeframe)}${settings.h7 ? " + H7" : ""} Scan — ${timeStr} ${settings.timezone}`,
     "",
   ];
 
@@ -278,7 +396,11 @@ async function runAndNotify(settings: Settings): Promise<void> {
 
   const summary = buildRunSummary(results, settings);
   console.log(summary.replace(/\n/g, " | "));
-  await sendNotifications(summary);
+
+  const totalPatterns = results.reduce((sum, r) => sum + r.patterns, 0);
+  if (totalPatterns > 0) {
+    await sendNotifications(summary);
+  }
 }
 
 async function main(): Promise<void> {
@@ -289,7 +411,7 @@ async function main(): Promise<void> {
   // --- Startup diagnostics ---
   const targets = getTargets();
   console.log("=== EBP Notification Service ===");
-  console.log(`Settings: timeframe=${settings.timeframe}min zone=${settings.timezone} cron="${settings.cron}"`);
+  console.log(`Settings: timeframe=${settings.timeframe}min zone=${settings.timezone} cron="${settings.cron}"${settings.h7 ? " H7=enabled" : ""}`);
   console.log(`Symbols: ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`);
   console.log(`Telegram: ${targets.telegramToken && targets.telegramChatId ? "configured" : "MISSING"}`);
   console.log(`Discord:  ${targets.discordWebhookUrl ? "configured" : "not set"}`);
@@ -310,7 +432,7 @@ async function main(): Promise<void> {
       "EBP Bot Started",
       "═══════════════════════════════════",
       "",
-      `${padRight("Timeframe", labelW)} : ${formatTimeframe(settings.timeframe)}`,
+      `${padRight("Timeframe", labelW)} : ${formatTimeframe(settings.timeframe)}${settings.h7 ? " + H7" : ""}`,
       `${padRight("Schedule", labelW)} : ${settings.cron}  (${settings.timezone})`,
       `${padRight("Symbols", labelW)} : ${symbols.map(s => toTvSymbol(s, settings.defaultExchange)).join(", ")}`,
       "═══════════════════════════════════"

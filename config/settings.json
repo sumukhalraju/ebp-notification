@@ -3,5 +3,6 @@
   "timezone": "America/New_York",
   "cron": "1 2,6,10,14,18,22 * * *",
   "defaultExchange": "CME_MINI",
-  "runOnStartup": true
+  "runOnStartup": true,
+  "h7": true
 }
