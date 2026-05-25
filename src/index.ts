@@ -18,6 +18,11 @@ type RunResult = {
   error?: string;
 };
 
+type RunResults = {
+  base: RunResult[];
+  h7?: RunResult[];
+};
+
 let running = false;
 
 function timeframeToSeconds(timeframe: string): number | null {
@@ -205,14 +210,15 @@ async function processSymbol(entry: SymbolEntry, settings: Settings, state: Stat
   return patternsFound;
 }
 
-async function runCheck(): Promise<RunResult[]> {
-  const results: RunResult[] = [];
+async function runCheck(): Promise<RunResults> {
+  const baseResults: RunResult[] = [];
 
   if (running) {
     console.error("SKIPPED: Previous run still in progress, skipping this scheduled check");
-    return results;
+    return { base: baseResults };
   }
 
+  let h7Results: RunResult[] | undefined;
   running = true;
   try {
     const settings = await loadSettings();
@@ -223,10 +229,10 @@ async function runCheck(): Promise<RunResult[]> {
       const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
       try {
         const patterns = await processSymbol(entry, settings, state);
-        results.push({ symbol: tvSymbol, patterns });
+        baseResults.push({ symbol: tvSymbol, patterns });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        results.push({ symbol: tvSymbol, patterns: 0, error: msg });
+        baseResults.push({ symbol: tvSymbol, patterns: 0, error: msg });
         console.error(`Error processing ${tvSymbol}`, error);
       }
     }
@@ -235,6 +241,7 @@ async function runCheck(): Promise<RunResult[]> {
       const h7Timeframe = "420";
       const h7Seconds = timeframeToSeconds(h7Timeframe);
       const h7Label = formatTimeframe(h7Timeframe);
+      h7Results = [];
 
       for (const entry of symbols) {
         const tvSymbol = toTvSymbol(entry, settings.defaultExchange);
@@ -330,21 +337,11 @@ async function runCheck(): Promise<RunResult[]> {
             lastChecked: latestCheckedTime
           };
 
-          const existing = results.find(r => r.symbol === tvSymbol);
-          if (existing) {
-            existing.patterns += h7Patterns;
-          } else {
-            results.push({ symbol: tvSymbol, patterns: h7Patterns });
-          }
+          h7Results.push({ symbol: tvSymbol, patterns: h7Patterns });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           console.error(`Error processing H7 ${tvSymbol}`, error);
-          const existing = results.find(r => r.symbol === tvSymbol);
-          if (existing) {
-            existing.error = existing.error ? `${existing.error}; H7: ${msg}` : `H7: ${msg}`;
-          } else {
-            results.push({ symbol: tvSymbol, patterns: 0, error: `H7: ${msg}` });
-          }
+          h7Results.push({ symbol: tvSymbol, patterns: 0, error: `H7: ${msg}` });
         }
       }
     }
@@ -354,18 +351,19 @@ async function runCheck(): Promise<RunResult[]> {
     running = false;
   }
 
-  return results;
+  return { base: baseResults, h7: h7Results };
 }
 
-function buildRunSummary(results: RunResult[], settings: Settings): string {
+function buildRunSummary(results: RunResult[], settings: Settings, timeframeLabel?: string): string {
   const totalPatterns = results.reduce((sum, r) => sum + r.patterns, 0);
   const now = new Date();
   const timeStr = now.toLocaleString("en-US", { timeZone: settings.timezone, hour12: true });
 
   const maxSymLen = Math.max(...results.map(r => r.symbol.length), 8);
+  const tfLabel = timeframeLabel ?? formatTimeframe(settings.timeframe);
   const lines = [
     "─────────────────────────────────────",
-    `EBP ${formatTimeframe(settings.timeframe)}${settings.h7 ? " + H7" : ""} Scan — ${timeStr} ${settings.timezone}`,
+    `EBP ${tfLabel} Scan — ${timeStr} ${settings.timezone}`,
     "",
   ];
 
@@ -387,19 +385,27 @@ function buildRunSummary(results: RunResult[], settings: Settings): string {
 
 async function runAndNotify(settings: Settings): Promise<void> {
   console.log(`[${new Date().toISOString()}] Running EBP scan...`);
-  const results = await runCheck();
+  const { base, h7 } = await runCheck();
 
-  if (results.length === 0) {
+  if (base.length === 0 && (!h7 || h7.length === 0)) {
     console.log("Scan skipped (no results)");
     return;
   }
 
-  const summary = buildRunSummary(results, settings);
-  console.log(summary.replace(/\n/g, " | "));
+  const baseSummary = buildRunSummary(base, settings);
+  console.log(baseSummary.replace(/\n/g, " | "));
+  const baseTotal = base.reduce((sum, r) => sum + r.patterns, 0);
+  if (baseTotal > 0) {
+    await sendNotifications(baseSummary);
+  }
 
-  const totalPatterns = results.reduce((sum, r) => sum + r.patterns, 0);
-  if (totalPatterns > 0) {
-    await sendNotifications(summary);
+  if (h7) {
+    const h7Summary = buildRunSummary(h7, settings, formatTimeframe("420"));
+    console.log(h7Summary.replace(/\n/g, " | "));
+    const h7Total = h7.reduce((sum, r) => sum + r.patterns, 0);
+    if (h7Total > 0) {
+      await sendNotifications(h7Summary);
+    }
   }
 }
 
