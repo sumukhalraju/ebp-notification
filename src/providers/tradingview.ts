@@ -112,9 +112,10 @@ function aggregateToH7(candles1h: Candle[], timezone: string, desiredCount: numb
   }
 
   const result: Candle[] = [];
-  for (const candle of candles1h) {
+  for (let idx = candles1h.length - 1; idx >= 0; idx--) {
     if (result.length >= desiredCount) break;
 
+    const candle = candles1h[idx];
     const date = new Date(candle.time * 1000);
     const etHour = parseInt(
       new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: false }).format(date),
@@ -131,7 +132,7 @@ function aggregateToH7(candles1h: Candle[], timezone: string, desiredCount: numb
     }
     if (group.length !== 7) continue;
 
-    result.push({
+    result.unshift({
       time: candle.time,
       open: group[0].open,
       high: Math.max(...group.map(c => c.high)),
