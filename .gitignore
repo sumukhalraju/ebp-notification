@@ -4,3 +4,4 @@ dist/
 data/state.json
 *.tmp
 data/*.tmp
+logs/

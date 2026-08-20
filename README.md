@@ -87,6 +87,34 @@ Schedule changes in `settings.json` are picked up without a restart. Changing `t
 
 On first run for a symbol (empty `lastChecked`), only the latest closed pair is evaluated so you do not get a dump of historical alerts.
 
+## Deployment (PM2)
+
+Single process only (`fork`, 1 instance). Clustering would duplicate scans and alerts.
+
+```
+npm install
+copy .env.example .env   # then fill in tokens
+npm run pm2:start
+npm run pm2:logs
+```
+
+| Command | What it does |
+|---|---|
+| `npm run pm2:start` | Build, then start or reload |
+| `npm run pm2:restart` | Build, then restart |
+| `npm run pm2:stop` | Stop the process |
+| `npm run pm2:logs` | Tail PM2 logs |
+| `npm run pm2:status` | List PM2 processes |
+
+To survive a reboot (Linux/macOS):
+
+```
+npx pm2 startup
+npx pm2 save
+```
+
+On Windows, `pm2 startup` is not available; start with `npm run pm2:start` after login, or use Task Scheduler.
+
 ## Deployment (systemd)
 
 ```

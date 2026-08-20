@@ -15,12 +15,18 @@
     "test": "tsx --test test/signals.test.ts test/time.test.ts test/h7.test.ts test/scan.test.ts test/notify.test.ts test/format.test.ts test/config.test.ts",
     "diagnose:h4": "tsx scripts/diagnose-h4.ts",
     "diagnose:h7": "tsx scripts/diagnose-h7.ts",
-    "verify:h7": "tsx scripts/verify-h7.ts"
+    "verify:h7": "tsx scripts/verify-h7.ts",
+    "pm2:start": "npm run build && pm2 startOrReload ecosystem.config.cjs --update-env",
+    "pm2:stop": "pm2 stop ebp-notification",
+    "pm2:restart": "npm run build && pm2 restart ebp-notification --update-env",
+    "pm2:logs": "pm2 logs ebp-notification",
+    "pm2:status": "pm2 status"
   },
   "dependencies": {
     "@mathieuc/tradingview": "^3.2.0",
     "dotenv": "^16.4.5",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "pm2": "^5.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
