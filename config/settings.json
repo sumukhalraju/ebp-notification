@@ -4,5 +4,11 @@
   "cron": "1 2,6,10,14,18,22 * * *",
   "defaultExchange": "CME_MINI",
   "runOnStartup": true,
-  "h7": true
+  "h7": true,
+  "h7Cron": "1 1,8 * * *",
+  "h7AnchorHours": [18, 1, 8],
+  "h7Transitions": [[18, 1], [1, 8]],
+  "lookbackDays": 2,
+  "fetchConcurrency": 2,
+  "failureAlertThreshold": 3
 }

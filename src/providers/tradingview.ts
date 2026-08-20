@@ -1,5 +1,7 @@
 import TradingView from "@mathieuc/tradingview";
-import { Candle } from "../types";
+import { aggregateToH7, DEFAULT_H7_ANCHOR_HOURS } from "../h7";
+import { log } from "../log";
+import { Candle, CandleProvider } from "../types";
 
 type Period = {
   time: number;
@@ -11,6 +13,9 @@ type Period = {
   close: number;
   volume?: number;
 };
+
+const FETCH_TIMEOUT_MS = 15000;
+const QUIET_SETTLE_MS = 1500;
 
 function normalizePeriods(periods: unknown): Period[] {
   if (!periods) {
@@ -38,7 +43,14 @@ function candlesFromPeriods(periods: Period[], count: number): Candle[] {
       close: Number(period.close),
       volume: period.volume === undefined ? undefined : Number(period.volume)
     }))
-    .filter((period) => Number.isFinite(period.time))
+    .filter(
+      (period) =>
+        Number.isFinite(period.time) &&
+        Number.isFinite(period.open) &&
+        Number.isFinite(period.high) &&
+        Number.isFinite(period.low) &&
+        Number.isFinite(period.close)
+    )
     .sort((a, b) => a.time - b.time)
     .slice(-count);
 }
@@ -48,15 +60,15 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
   const chart = new client.Session.Chart();
 
   return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Timeout fetching candles for ${tvSymbol}`));
-    }, 15000);
-
     let settled = false;
+    let latest: Candle[] = [];
+    let quietTimer: NodeJS.Timeout | undefined;
 
     const cleanup = () => {
       clearTimeout(timeoutId);
+      if (quietTimer) {
+        clearTimeout(quietTimer);
+      }
       try {
         chart.delete();
       } catch {
@@ -70,7 +82,9 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
     };
 
     const settle = (result: Candle[] | Error) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cleanup();
       if (result instanceof Error) {
@@ -79,6 +93,15 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
         resolve(result);
       }
     };
+
+    const timeoutId = setTimeout(() => {
+      if (latest.length >= 2) {
+        log.warn(`Timed out fetching ${tvSymbol}; using ${latest.length} candles already received`);
+        settle(latest);
+        return;
+      }
+      settle(new Error(`Timeout fetching candles for ${tvSymbol}`));
+    }, FETCH_TIMEOUT_MS);
 
     if (typeof (chart as unknown as Record<string, unknown>).onError === "function") {
       (chart as unknown as { onError: (fn: (err: unknown) => void) => void }).onError((err: unknown) => {
@@ -89,12 +112,22 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
     chart.onUpdate(() => {
       try {
         const periods = normalizePeriods((chart as { periods?: unknown }).periods);
-        if (periods.length < count) {
+        const candles = candlesFromPeriods(periods, count);
+        latest = candles;
+
+        if (candles.length >= count) {
+          settle(candles);
           return;
         }
 
-        const candles = candlesFromPeriods(periods, count);
-        settle(candles);
+        if (quietTimer) {
+          clearTimeout(quietTimer);
+        }
+        quietTimer = setTimeout(() => {
+          if (latest.length >= 2) {
+            settle(latest);
+          }
+        }, QUIET_SETTLE_MS);
       } catch (error) {
         settle(error instanceof Error ? error : new Error(String(error)));
       }
@@ -104,49 +137,14 @@ function fetchCandlesOnce(tvSymbol: string, timeframe: string, count: number): P
   });
 }
 
-function aggregateToH7(candles1h: Candle[], timezone: string, desiredCount: number): Candle[] {
-  const targetHours = new Set([18, 1, 8]);
-  const candleMap = new Map<number, Candle>();
-  for (const c of candles1h) {
-    candleMap.set(c.time, c);
-  }
-
-  const result: Candle[] = [];
-  for (let idx = candles1h.length - 1; idx >= 0; idx--) {
-    if (result.length >= desiredCount) break;
-
-    const candle = candles1h[idx];
-    const date = new Date(candle.time * 1000);
-    const etHour = parseInt(
-      new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: false }).format(date),
-      10
-    );
-
-    if (!targetHours.has(etHour)) continue;
-
-    const group: Candle[] = [];
-    for (let i = 0; i < 7; i++) {
-      const c = candleMap.get(candle.time + i * 3600);
-      if (!c) break;
-      group.push(c);
-    }
-    if (group.length !== 7) continue;
-
-    result.unshift({
-      time: candle.time,
-      open: group[0].open,
-      high: Math.max(...group.map(c => c.high)),
-      low: Math.min(...group.map(c => c.low)),
-      close: group[6].close,
-    });
-  }
-
-  return result;
-}
-
-export async function fetchCandlesH7(tvSymbol: string, timezone: string, count: number): Promise<Candle[]> {
-  const candles1h = await fetchCandles(tvSymbol, "60", count * 30);
-  return aggregateToH7(candles1h, timezone, count);
+export async function fetchCandlesH7(
+  tvSymbol: string,
+  timezone: string,
+  count: number,
+  anchorHours: number[] = DEFAULT_H7_ANCHOR_HOURS
+): Promise<Candle[]> {
+  const candles1h = await fetchCandles(tvSymbol, "60", Math.max(count * 30, 72));
+  return aggregateToH7(candles1h, timezone, count, anchorHours);
 }
 
 export async function fetchCandles(tvSymbol: string, timeframe: string, count: number): Promise<Candle[]> {
@@ -167,3 +165,8 @@ export async function fetchCandles(tvSymbol: string, timeframe: string, count: n
 
   throw lastError ?? new Error(`Failed to fetch candles for ${tvSymbol}`);
 }
+
+export const tradingViewProvider: CandleProvider = {
+  fetchCandles,
+  fetchCandlesH7
+};

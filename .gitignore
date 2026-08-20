@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 data/state.json
+*.tmp
+data/*.tmp

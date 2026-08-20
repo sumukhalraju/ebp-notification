@@ -4,11 +4,18 @@
   "private": true,
   "description": "4h CME candle notification service",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "once": "node dist/index.js --once"
+    "once": "node dist/index.js --once",
+    "test": "tsx --test test/signals.test.ts test/time.test.ts test/h7.test.ts test/scan.test.ts test/notify.test.ts test/format.test.ts test/config.test.ts",
+    "diagnose:h4": "tsx scripts/diagnose-h4.ts",
+    "diagnose:h7": "tsx scripts/diagnose-h7.ts",
+    "verify:h7": "tsx scripts/verify-h7.ts"
   },
   "dependencies": {
     "@mathieuc/tradingview": "^3.2.0",

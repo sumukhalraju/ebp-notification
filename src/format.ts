@@ -7,7 +7,8 @@ export function formatTime(epochSeconds: number, timeZone: string): string {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false
+    hour12: false,
+    hourCycle: "h23"
   };
 
   try {
