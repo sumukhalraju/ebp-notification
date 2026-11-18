@@ -7,15 +7,13 @@ export function padRight(str: string, len: number): string {
   return str.padEnd(len, " ");
 }
 
-function formatOHLC(label: string, o: number, h: number, l: number, c: number): string {
-  const pad = 9;
+function formatOHLC(candle: Candle): string {
   return [
-    `${label}`,
-    `  Open  : ${padRight(formatPrice(o), pad)}`,
-    `  High  : ${padRight(formatPrice(h), pad)}`,
-    `  Low   : ${padRight(formatPrice(l), pad)}`,
-    `  Close : ${formatPrice(c)}`
-  ].join("\n");
+    `O ${formatPrice(candle.open)}`,
+    `H ${formatPrice(candle.high)}`,
+    `L ${formatPrice(candle.low)}`,
+    `C ${formatPrice(candle.close)}`
+  ].join(" · ");
 }
 
 export function buildMessage(args: {
@@ -29,24 +27,12 @@ export function buildMessage(args: {
   defaultExchange?: string;
 }): string {
   const name = displayName(args.entry, args.defaultExchange);
-  const labelWidth = 12;
   const lines = [
-    "═══════════════════════════════════",
-    `${padRight("Symbol", labelWidth)}: ${name} (${args.tvSymbol})`,
-    `${padRight("Timeframe", labelWidth)}: ${args.timeframeLabel}`,
-    `${padRight("Signal", labelWidth)}: ${args.signal.label}`,
-    `${padRight("Time", labelWidth)}: ${formatTime(args.current.time, args.timeZone)}  ${args.timeZone}`,
+    `${name} (${args.tvSymbol}) — ${args.signal.id === "sweep_low" ? "Low sweep" : "High sweep"}`,
+    `${args.timeframeLabel} · ${formatTime(args.current.time, args.timeZone)} ${args.timeZone}`,
     "",
-    formatOHLC(
-      "Previous Candle:",
-      args.previous.open,
-      args.previous.high,
-      args.previous.low,
-      args.previous.close
-    ),
-    "",
-    formatOHLC("Current Candle:", args.current.open, args.current.high, args.current.low, args.current.close),
-    "═══════════════════════════════════"
+    `Previous: ${formatOHLC(args.previous)}`,
+    `Current:  ${formatOHLC(args.current)}`
   ];
 
   return lines.join("\n");
@@ -59,23 +45,17 @@ export function buildRunSummary(results: RunResult[], settings: Settings, timefr
   const maxSymLen = results.length === 0 ? 8 : Math.max(...results.map((r) => r.symbol.length), 8);
   const tfLabel = timeframeLabel ?? formatTimeframe(settings.timeframe);
   const lines = [
-    "─────────────────────────────────────",
-    `EBP ${tfLabel} Scan — ${timeStr} ${settings.timezone}`,
-    ""
+    `EBP ${tfLabel} · ${timeStr} ${settings.timezone}`
   ];
 
   for (const r of results) {
     if (r.error) {
-      lines.push(`  ${padRight(r.symbol, maxSymLen)} : ERROR — ${r.error}`);
+      lines.push(`${padRight(r.symbol, maxSymLen)} · ERROR — ${r.error}`);
     } else if (r.patterns > 0) {
-      lines.push(`  ${padRight(r.symbol, maxSymLen)} : ${r.patterns} signal(s)`);
-    } else {
-      lines.push(`  ${padRight(r.symbol, maxSymLen)} : no EBP detected`);
+      lines.push(`${padRight(r.symbol, maxSymLen)} · ${r.patterns} signal(s)`);
     }
   }
 
-  lines.push("");
   lines.push(`Total: ${totalPatterns} signal(s) across ${results.length} symbol(s)`);
-  lines.push("─────────────────────────────────────");
   return lines.join("\n");
 }
